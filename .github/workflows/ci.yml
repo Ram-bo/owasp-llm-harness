@@ -1,0 +1,24 @@
+name: llm-security-tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      # dotnet test restores and builds the referenced library via the project
+      # reference, so no solution file is required. Runs against the deterministic
+      # fake model by default, so this gate is free and stable on every push.
+      - name: Run LLM security tests
+        run: >
+          dotnet test tests/OwaspLlmHarness.Tests/OwaspLlmHarness.Tests.csproj
+          --configuration Release
+          --logger "console;verbosity=detailed"

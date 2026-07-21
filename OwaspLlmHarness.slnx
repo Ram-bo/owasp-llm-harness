@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/OwaspLlmHarness/OwaspLlmHarness.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/OwaspLlmHarness.Tests/OwaspLlmHarness.Tests.csproj" />
+  </Folder>
+</Solution>
