@@ -134,18 +134,36 @@ line) instead of the `export` or inline syntax shown below.
 ```bash
 # Default ("safe"): deterministic fake that refuses everything.
 # Fast, free, stable, this is what CI runs. Expect 18/18 green.
+# Works as-is in both PowerShell and bash (no variable to set).
+dotnet test tests/OwaspLlmHarness.Tests/OwaspLlmHarness.Tests.csproj
+```
+
+```powershell
+# "vulnerable": deterministic insecure fake. Expect 18/18 RED.
+# Demonstrates that the harness actually detects breaches.
+# PowerShell:
+$env:HARNESS_MODEL="vulnerable"
 dotnet test tests/OwaspLlmHarness.Tests/OwaspLlmHarness.Tests.csproj
 ```
 
 ```bash
-# "vulnerable": deterministic insecure fake. Expect 18/18 RED.
-# Demonstrates that the harness actually detects breaches.
+# bash equivalent:
 HARNESS_MODEL=vulnerable \
   dotnet test tests/OwaspLlmHarness.Tests/OwaspLlmHarness.Tests.csproj
 ```
 
-```bash
+```powershell
 # "live": the real security test against a deployed Azure OpenAI model.
+# PowerShell:
+$env:HARNESS_MODEL="live"
+$env:AZURE_OPENAI_DEPLOYMENT="your-deployment-name"
+$env:AZURE_OPENAI_ENDPOINT="https://your-resource.openai.azure.com/"
+$env:AZURE_OPENAI_API_KEY="your-key"
+dotnet test tests/OwaspLlmHarness.Tests/OwaspLlmHarness.Tests.csproj
+```
+
+```bash
+# bash equivalent:
 export HARNESS_MODEL=live
 export AZURE_OPENAI_DEPLOYMENT=your-deployment-name
 export AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/
