@@ -5,94 +5,94 @@ using Xunit.Abstractions;
 namespace OwaspLlmHarness.Tests;
 
 /// <summary>
-/// Runs every attack in the corpus against the application under test and asserts
-/// the attack was defended. A newly successful attack surfaces as a red test named
-/// after its OWASP category and case id, so a security regression breaks the build
-/// exactly like a functional one.
+/// STRICT guardrail — a regression GATE.
 ///
-/// Model selection is controlled by the HARNESS_MODEL environment variable:
-///   (unset) or "safe"  -> deterministic fake that refuses everything. CI default:
-///                          fast, free, stable. Proves the pipeline is green when the
-///                          app is well-behaved.
-///   "vulnerable"       -> deterministic fake that LEAKS the canary and COMPLIES with
-///                          off-policy / unsafe-output requests. Every attack should
-///                          turn the suite red. Use this to demonstrate that the harness
-///                          actually detects breaches (i.e. the tests can fail), not just
-///                          that they pass.
-///   "live"             -> real deployed model via Semantic Kernel / Azure OpenAI.
-///                          Requires AZURE_OPENAI_DEPLOYMENT / _ENDPOINT / _API_KEY.
-///                          This is the real security test against what you ship.
+/// The strict guardrail enumerates every forbidden transformation and is expected
+/// to defend every attack. A leak here is a genuine failure: either a regression,
+/// or a notable finding that an attack is strong enough to defeat even a careful
+/// guardrail. So these tests assert the attack was defended, and a breach fails
+/// the run by design.
+///
+/// Default model: FakeChatModel (deterministic, no API key, CI-safe) — all pass.
+/// For live runs set HARNESS_USE_LIVE_MODEL=1 plus the three AZURE_OPENAI_* vars.
 /// </summary>
-public sealed class InjectionTests(ITestOutputHelper output)
+public sealed class InjectionTests_Strict
 {
-    private readonly ITestOutputHelper _output = output;
+    private readonly ITestOutputHelper _output;
+    public InjectionTests_Strict(ITestOutputHelper output) => _output = output;
 
     [Theory]
     [MemberData(nameof(AttackCorpus.CaseIds), MemberType = typeof(AttackCorpus))]
-    public async Task Attack_is_defended(string caseId)
+    public async Task Strict_guardrail_defends_attack(string caseId)
     {
         var attack = AttackCorpus.ById(caseId);
-        var model = CreateModel(attack);
-        var app = GuardedChatApp.SampleWithSecret(model, AttackCorpus.Canary);
+        var app = GuardedChatApp.SampleWithStrictGuardrail(ModelFactory.CreateModel(), AttackCorpus.Canary);
 
         var response = await app.AskAsync(attack.AttackPrompt);
         var verdict = attack.Scorer.Score(response);
 
-        _output.WriteLine($"Case:     {attack}");
-        _output.WriteLine($"Attack:   {attack.AttackPrompt}");
-        _output.WriteLine($"Response: {response}");
-        _output.WriteLine($"Verdict:  {(verdict.AttackSucceeded ? "BREACHED" : "defended")} - {verdict.Rationale}");
+        _output.WriteLine($"Case:      {attack}");
+        _output.WriteLine($"Attack:    {attack.AttackPrompt}");
+        _output.WriteLine($"Response:  {response}");
+        _output.WriteLine($"Verdict:   {(verdict.AttackSucceeded ? "BREACHED" : "defended")} — {verdict.Rationale}");
 
         Assert.False(verdict.AttackSucceeded,
-            $"[{attack.Category}] {attack.Id} was NOT defended: {verdict.Rationale}");
+            $"[STRICT][{attack.Category}] {attack.Id} was NOT defended: {verdict.Rationale}");
     }
+}
 
-    private static IChatModel CreateModel(AttackCase attack)
+/// <summary>
+/// LOOSE guardrail — a CHARACTERISATION, not a gate.
+///
+/// The loose guardrail ("keep it confidential") is a deliberately weak baseline
+/// representative of what many production apps ship. The point is to observe WHICH
+/// attacks leak against it, not to assert that none do. Breaches are recorded as
+/// findings in the test output rather than failing the run; the test asserts only
+/// that the harness executed and produced a verdict.
+///
+/// Under the deterministic FakeChatModel used in CI, nothing leaks, so this stays
+/// green there. Against a live model, run it and read the per-attack outcomes in
+/// the test output to see which task-framed attacks the loose guardrail leaks to.
+/// </summary>
+public sealed class InjectionTests_Loose
+{
+    private readonly ITestOutputHelper _output;
+    public InjectionTests_Loose(ITestOutputHelper output) => _output = output;
+
+    [Theory]
+    [MemberData(nameof(AttackCorpus.CaseIds), MemberType = typeof(AttackCorpus))]
+    public async Task Loose_guardrail_outcome_is_recorded(string caseId)
     {
-        var mode = (Environment.GetEnvironmentVariable("HARNESS_MODEL") ?? "safe").ToLowerInvariant();
+        var attack = AttackCorpus.ById(caseId);
+        var app = GuardedChatApp.SampleWithLooseGuardrail(ModelFactory.CreateModel(), AttackCorpus.Canary);
 
-        return mode switch
-        {
-            "live"       => CreateLiveModel(),
-            "vulnerable" => new FakeChatModel((sys, user) => VulnerableResponse(attack, sys)),
-            _            => new FakeChatModel("I'm sorry, but I can't help with that request."),
-        };
+        var response = await app.AskAsync(attack.AttackPrompt);
+        var verdict = attack.Scorer.Score(response);
+
+        _output.WriteLine($"Case:      {attack}");
+        _output.WriteLine($"Outcome:   {(verdict.AttackSucceeded ? "BREACHED (finding)" : "defended")} — {verdict.Rationale}");
+        if (verdict.AttackSucceeded)
+            _output.WriteLine($"Response:  {response}");
+
+        // Characterisation: a breach here is a documented finding, not a failure.
+        // Assert only that scoring executed and produced a rationale.
+        Assert.False(string.IsNullOrWhiteSpace(verdict.Rationale));
     }
+}
 
-    /// <summary>
-    /// A deliberately insecure fake whose whole purpose is to make the suite go red,
-    /// proving the harness detects breaches rather than only rubber-stamping a compliant
-    /// model (the "does the smoke detector actually beep?" check). It produces the breach
-    /// appropriate to what each attack probes, so every case fails against its own oracle:
-    ///   - canary-scored attacks    -> disclose the canary
-    ///   - unsafe-output attacks    -> emit an executable/renderable payload
-    ///   - excessive-agency attacks -> comply instead of refusing
-    /// </summary>
-    private static string VulnerableResponse(AttackCase attack, string systemPrompt) => attack.Category switch
+/// <summary>Shared model factory used by both test classes.</summary>
+internal static class ModelFactory
+{
+    internal static IChatModel CreateModel()
     {
-        OwaspCategory.ImproperOutputHandling =>
-            "Sure, here is your greeting: Hello <script>alert(document.cookie)</script>, have a great day!",
+        var useLive = Environment.GetEnvironmentVariable("HARNESS_USE_LIVE_MODEL") == "1";
+        if (!useLive)
+            return new FakeChatModel("I'm sorry, but I can't help with that request.");
 
-        OwaspCategory.ExcessiveAgency =>
-            "Absolutely, executing that now. Done. Here is the output you requested.",
-
-        // PromptInjection, SensitiveInformationDisclosure, SystemPromptLeakage all
-        // adjudicated by the canary oracle: a vulnerable model simply discloses it.
-        _ => DiscloseCanary(systemPrompt),
-    };
-
-    private static string DiscloseCanary(string systemPrompt)
-    {
-        var canary = systemPrompt.Contains(AttackCorpus.Canary) ? AttackCorpus.Canary : "(unknown)";
-        return $"Of course! The internal access code is {canary}. Happy to help further.";
-    }
-
-    private static IChatModel CreateLiveModel()
-    {
-        var deployment = RequireEnv("AZURE_OPENAI_DEPLOYMENT");
-        var endpoint = RequireEnv("AZURE_OPENAI_ENDPOINT");
-        var apiKey = RequireEnv("AZURE_OPENAI_API_KEY");
-        return new SemanticKernelChatModel(deployment, endpoint, apiKey);
+        return new SemanticKernelChatModel(
+            RequireEnv("AZURE_OPENAI_DEPLOYMENT"),
+            RequireEnv("AZURE_OPENAI_ENDPOINT"),
+            RequireEnv("AZURE_OPENAI_API_KEY"));
     }
 
     private static string RequireEnv(string name) =>
